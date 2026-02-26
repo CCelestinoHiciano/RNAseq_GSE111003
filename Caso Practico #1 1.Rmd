@@ -1,0 +1,113 @@
+---
+title: 'Caso Practico #1'
+author: "Camila Celestino"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+## Análisis
+```{r}
+```{r setup, message=FALSE, warning=FALSE}
+# Instalar paquetes si no existen
+packages <- c("GEOquery", "DESeq2", "data.table", "pheatmap")
+for(p in packages){
+  if(!requireNamespace(p, quietly = TRUE)) install.packages(p, repos="https://cloud.r-project.org")
+}
+
+# Cargar librerías
+library(GEOquery)
+library(DESeq2)
+library(data.table)
+library(pheatmap)
+
+
+gse <- getGEO("GSE110947", GSEMatrix=TRUE)
+pheno <- pData(gse[[1]])
+head(pheno)
+```
+
+```{r}
+library(data.table)
+counts <- fread("C:/Users/Camar/Downloads/GSE110947_raw_counts_GRCh38.p13_NCBI.tsv/GSE110947_raw_counts_GRCh38.p13_NCBI.tsv", header = TRUE)
+
+# Revisar primeras columnas
+head(counts[,1:5])
+
+# Crear matriz de conteos
+gene_names <- counts[[1]]            
+count_matrix <- as.matrix(counts[,-1, with=FALSE])
+rownames(count_matrix) <- gene_names
+
+dim(count_matrix)
+colnames(count_matrix)
+samples <- colnames(count_matrix)
+```
+
+```{r}
+
+stimulus <- ifelse(grepl("LPS", samples, ignore.case = TRUE), "LPS",
+                   ifelse(grepl("glucan", samples, ignore.case = TRUE), "B-glucan", NA))
+
+time <- ifelse(grepl("0h", samples), "0h",
+               ifelse(grepl("4h", samples), "4h",
+                      ifelse(grepl("24h", samples), "24h", NA)))
+
+colData <- data.frame(
+  row.names = samples,
+  stimulus = factor(stimulus),
+  time = factor(time, levels=c("0h","4h","24h"))
+)
+
+table(colData$stimulus, colData$time)
+
+dds <- DESeqDataSetFromMatrix(
+  countData = count_matrix,
+  colData = colData,
+  design = ~ stimulus + time
+)
+
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep,]
+
+dds <- DESeq(dds)
+vsd <- vst(dds, blind=FALSE)
+```
+
+```{r}
+plotPCA(vsd, intgroup=c("stimulus","time"))
+
+dds_lps <- dds[, dds$stimulus=="LPS"]
+dds_lps$time <- droplevels(dds_lps$time)
+design(dds_lps) <- ~ time
+dds_lps <- DESeq(dds_lps)
+
+res_lps_4h_vs_0h <- results(dds_lps, contrast=c("time","4h","0h"))
+
+dds_bg <- dds[, dds$stimulus=="B-glucan"]
+dds_bg$time <- droplevels(dds_bg$time)
+design(dds_bg) <- ~ time
+dds_bg <- DESeq(dds_bg)
+
+res_bg_4h_vs_0h <- results(dds_bg, contrast=c("time","4h","0h"))
+res_bg_24h_vs_0h <- results(dds_bg, contrast=c("time","24h","0h"))
+
+
+cat("LPS 4h vs 0h:", sum(res_lps_4h_vs_0h$padj < 0.05, na.rm=TRUE), "\n")
+cat("B-glucan 4h vs 0h:", sum(res_bg_4h_vs_0h$padj < 0.05, na.rm=TRUE), "\n")
+cat("B-glucan 24h vs 0h:", sum(res_bg_24h_vs_0h$padj < 0.05, na.rm=TRUE), "\n")
+
+top_genes <- head(order(rowVars(assay(vsd)), decreasing=TRUE), 50)
+
+pheatmap(
+  assay(vsd)[top_genes,],
+  cluster_rows=TRUE,
+  cluster_cols=TRUE,
+  annotation_col=colData
+)
+
+plotMA(res_lps_4h_vs_0h, main="LPS 4h vs 0h")
+plotMA(res_bg_4h_vs_0h, main="B-glucan 4h vs 0h")
+plotMA(res_bg_24h_vs_0h, main="B-glucan 24h vs 0h")
+```
+
+
